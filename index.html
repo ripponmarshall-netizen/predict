@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en-GB" class="pk-booting">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Predikt</title>
+    <meta
+      name="description"
+      content="A free Jamaican forecasting league. Make your call, score points, climb the table."
+    />
+    <meta name="theme-color" content="#000000" id="theme-color-meta" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="Predikt" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="icon-192.svg" />
+    <!-- iOS only takes a PNG here; with an SVG, Add to Home Screen falls
+         back to a snapshot of the page. -->
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script>
+      // Apply the saved theme before first paint, so the loading screen and
+      // app don't flash dark for light-theme users.
+      (function () {
+        try {
+          var t =
+            (JSON.parse(localStorage.getItem("predikt:v1") || "{}") || {})
+              .theme || "auto";
+          if (t === "auto") {
+            t =
+              window.matchMedia &&
+              matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          }
+          document.documentElement.setAttribute("data-theme", t);
+          var m = document.getElementById("theme-color-meta");
+          if (m)
+            m.setAttribute("content", t === "light" ? "#f2f2f7" : "#000000");
+        } catch (e) {}
+      })();
+      // Loading screen hand-off: once the app has mounted (app.jsx calls
+      // pkSplashDone), the splash fades and the screen's cards rise in.
+      // A slow connection gets a hint after 12 seconds.
+      (function () {
+        var slow = setTimeout(function () {
+          var sub = document.getElementById("pk-splash-sub");
+          if (sub) sub.textContent = "Still loading… check your connection";
+        }, 12000);
+        window.pkSplashDone = function () {
+          clearTimeout(slow);
+          var el = document.getElementById("pk-splash");
+          document.documentElement.classList.remove("pk-booting");
+          if (!el) return;
+          el.classList.add("is-leaving");
+          el.setAttribute("aria-busy", "false");
+          setTimeout(function () {
+            el.remove();
+          }, 400);
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="pk-splash" class="pk-splash" role="status" aria-busy="true">
+      <svg
+        class="pk-splash-logo"
+        viewBox="0 0 192 192"
+        width="88"
+        height="88"
+        aria-hidden="true"
+      >
+        <rect width="192" height="192" rx="42" fill="#0b0b0c" />
+        <circle
+          cx="96"
+          cy="96"
+          r="58"
+          fill="none"
+          stroke="#f4f4f5"
+          stroke-opacity="0.18"
+          stroke-width="12"
+        />
+        <circle
+          cx="96"
+          cy="96"
+          r="58"
+          fill="none"
+          stroke="#ff9f0a"
+          stroke-width="12"
+          stroke-linecap="round"
+          stroke-dasharray="262.4 364.4"
+          transform="rotate(-90 96 96)"
+        />
+        <path
+          d="M73 98l15 15 31-34"
+          fill="none"
+          stroke="#f4f4f5"
+          stroke-width="11"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <div class="pk-splash-title">Predikt</div>
+      <div class="pk-splash-sub" id="pk-splash-sub">
+        Loading<span class="pk-dots" aria-hidden="true"
+          ><i></i><i></i><i></i
+        ></span>
+      </div>
+    </div>
+    <div id="root"></div>
+    <noscript>Predikt needs JavaScript turned on.</noscript>
+
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
+      integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
+      integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- Order matters: each file uses what the ones above it define.
+         Add a new screen above app.jsx, and to ASSETS in sw.js. -->
+    <script type="text/babel" src="helpers.jsx"></script>
+    <script type="text/babel" src="components.jsx"></script>
+    <script type="text/babel" src="questions.jsx"></script>
+    <script type="text/babel" src="leaderboard.jsx"></script>
+    <script type="text/babel" src="me.jsx"></script>
+    <script type="text/babel" src="admin.jsx"></script>
+    <script type="text/babel" src="app.jsx"></script>
+
+    <script>
+      if (
+        "serviceWorker" in navigator &&
+        location.protocol !== "blob:" &&
+        location.protocol !== "file:"
+      ) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("sw.js").catch(() => {});
+        });
+      }
+    </script>
+  </body>
+</html>

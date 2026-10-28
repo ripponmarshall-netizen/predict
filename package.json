@@ -1,0 +1,15 @@
+{
+  "name": "predikt",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node predikt.test.js && node check-jsx.js",
+    "lint": "eslint .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@babel/standalone": "7.29.0",
+    "eslint": "^9.26.0",
+    "prettier": "^3.5.3"
+  }
+}
