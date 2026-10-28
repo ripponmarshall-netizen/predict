@@ -15,12 +15,20 @@ function Card({ children, style, id }) {
   );
 }
 
-function SectionHead({ title, subtitle, right }) {
+/* SectionHead — a card's title, an optional line under it, and an
+   optional icon tile in front (tinted with `tone`, the accent by default). */
+function SectionHead({ title, subtitle, right, icon, tone = "var(--accent)" }) {
   return (
-    <div style={{ marginBottom: 12, display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-      <div style={{ minWidth: 0 }}>
+    <div style={{ marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      {icon && (
+        <span aria-hidden style={{
+          width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+          background: `color-mix(in oklab, ${tone} 16%, transparent)`, color: tone, alignSelf: "flex-start",
+        }}><Icon name={icon} size={17} /></span>
+      )}
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.01em" }}>{title}</div>
-        {subtitle && <div style={{ fontSize: 12.5, color: "var(--ink-faint)", marginTop: 2 }}>{subtitle}</div>}
+        {subtitle && <div style={{ fontSize: 12.5, color: "var(--ink-faint)", marginTop: 2, lineHeight: 1.45 }}>{subtitle}</div>}
       </div>
       {right}
     </div>
@@ -207,7 +215,7 @@ function Collapse({ open, children }) {
    up longer so there's time to reach them. */
 function showToast(message, opts) {
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("pk-toast", { detail: { message, action: opts?.action || null } }));
+    window.dispatchEvent(new CustomEvent("pk-toast", { detail: { message, action: opts?.action || null, tone: opts?.tone || null } }));
   }
 }
 const TOAST_EXIT_MS = 200;
@@ -226,9 +234,10 @@ function ToastHost() {
   useEffectC(() => {
     const onToast = (e) => {
       const d = e.detail || {};
-      setToast({ id: Date.now(), message: String(d.message || ""), action: d.action });
+      setToast({ id: Date.now(), message: String(d.message || ""), action: d.action, tone: d.tone });
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => dismissRef.current(), d.action ? 6000 : 2200);
+      // Errors stay up longer: they usually say what to do next.
+      timerRef.current = setTimeout(() => dismissRef.current(), d.action ? 6000 : d.tone === "error" ? 4200 : 2200);
     };
     window.addEventListener("pk-toast", onToast);
     return () => {
@@ -243,7 +252,7 @@ function ToastHost() {
     dismiss();
   };
   return (
-    <div aria-live="polite" className="pk-toast-wrap" style={{
+    <div aria-live={toast.tone === "error" ? "assertive" : "polite"} className="pk-toast-wrap" style={{
       position: "fixed", left: 0, right: 0,
       display: "flex", justifyContent: "center", zIndex: 90, pointerEvents: "none", padding: "0 16px",
     }}>
@@ -251,11 +260,17 @@ function ToastHost() {
         background: "var(--surface-translucent)",
         backdropFilter: "blur(20px) saturate(180%)", WebkitBackdropFilter: "blur(20px) saturate(180%)",
         border: "1px solid var(--glass-edge)",
-        color: "var(--ink)", borderRadius: 999, padding: toast.action ? "6px 6px 6px 16px" : "10px 16px", fontSize: 13,
+        color: "var(--ink)", borderRadius: toast.message.length > 48 ? 18 : 999,
+        padding: toast.action ? "6px 6px 6px 12px" : "10px 16px 10px 12px", fontSize: 13, lineHeight: 1.4,
         boxShadow: "0 12px 32px -16px rgba(0,0,0,0.7)", maxWidth: 420,
-        display: "flex", alignItems: "center", gap: 12,
+        display: "flex", alignItems: "center", gap: 10,
         pointerEvents: toast.action && !toast.leaving ? "auto" : "none",
       }}>
+        {toast.tone && (
+          <span className="pk-pop" style={{ display: "inline-flex", color: toast.tone === "error" ? "var(--bad)" : "var(--ok)" }}>
+            <Icon name={toast.tone === "error" ? "alert" : "checkCircle"} size={18} stroke={2} />
+          </span>
+        )}
         <span>{toast.message}</span>
         {toast.action && (
           <button onClick={act} style={{
@@ -712,20 +727,23 @@ function useModalDismiss(onClose) {
 
 /* Tag — a small rounded label: region (with its colour dot), category,
    status. */
-function Tag({ children, color, tone, style }) {
+function Tag({ children, color, tone, icon, style }) {
   return (
     <span className="pk-tag" style={{
       ...(tone ? { background: `color-mix(in oklab, ${tone} 16%, transparent)`, color: tone } : null),
       ...style,
     }}>
-      {color && <i style={{ background: color }} />}
+      {icon ? <Icon name={icon} size={12} stroke={2.1} style={color ? { color } : null} /> : color && <i style={{ background: color }} />}
       {children}
     </span>
   );
 }
 function RegionTag({ region }) {
   const r = regionOf(region);
-  return <Tag color={r.color}>{r.l}</Tag>;
+  return <Tag icon={r.icon} color={r.color}>{r.l}</Tag>;
+}
+function CategoryTag({ category }) {
+  return <Tag icon={CATEGORY_ICONS[category] || "other"}>{category}</Tag>;
 }
 
 /* FieldLabel — the small label over a form field. */
@@ -751,9 +769,111 @@ function SwitchRow({ label, detail, checked, onChange }) {
   );
 }
 
-/* EmptyNote — a quiet line for a list with nothing in it. */
-function EmptyNote({ children }) {
-  return <div style={{ padding: "18px 4px", textAlign: "center", fontSize: 13.5, color: "var(--ink-faint)", lineHeight: 1.5 }}>{children}</div>;
+/* EmptyNote — a quiet line for a list with nothing in it, with a softly
+   floating icon above when there's room for one. */
+function EmptyNote({ children, icon }) {
+  return (
+    <div style={{ padding: icon ? "22px 8px 18px" : "18px 4px", textAlign: "center", fontSize: 13.5, color: "var(--ink-faint)", lineHeight: 1.5 }}>
+      {icon && (
+        <span className="pk-float" style={{ display: "inline-flex", width: 52, height: 52, borderRadius: 16, alignItems: "center", justifyContent: "center", background: "var(--fill)", color: "var(--ink-dim)", marginBottom: 10 }}>
+          <Icon name={icon} size={24} />
+        </span>
+      )}
+      <div>{children}</div>
+    </div>
+  );
+}
+
+/* Spinner — a small ring that turns, for a button or a sync in progress. */
+function Spinner({ size = 16, style }) {
+  return (
+    <svg aria-hidden="true" className="pk-spin" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" style={{ flexShrink: 0, ...style }}>
+      <circle cx="12" cy="12" r="9" strokeOpacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" />
+    </svg>
+  );
+}
+
+/* Skeleton — grey placeholders with a light sweeping across, while the
+   first load from the server is on its way. */
+function SkeletonRows({ count = 3 }) {
+  return (
+    <div style={{ display: "grid", gap: 8 }} aria-busy="true" aria-label="Loading">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="pk-skeleton" style={{ borderRadius: 14, padding: "14px", background: "var(--bg-2)" }}>
+          <div style={{ display: "flex", gap: 6 }}><span className="pk-bone" style={{ width: 74 }} /><span className="pk-bone" style={{ width: 56 }} /></div>
+          <span className="pk-bone" style={{ width: "92%", height: 14, marginTop: 12 }} />
+          <span className="pk-bone" style={{ width: "64%", height: 14, marginTop: 6 }} />
+          <span className="pk-bone" style={{ width: 120, marginTop: 12 }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* Burst — a little confetti, for a call that came good. Pieces fly out
+   from the middle of whatever it sits in (position: relative). Nothing
+   under reduced motion. */
+const BURST_COLOURS = ["var(--accent)", "var(--jm)", "var(--intl)", "var(--warn)", "var(--violet)"];
+function Burst({ pieces = 18 }) {
+  if (prefersReducedMotion()) return null;
+  return (
+    <span aria-hidden className="pk-burst">
+      {Array.from({ length: pieces }, (_, i) => {
+        const a = (i / pieces) * Math.PI * 2 + (i % 3) * 0.35;
+        const d = 46 + (i % 4) * 16;
+        return <i key={i} style={{
+          "--x": `${Math.cos(a) * d}px`, "--y": `${Math.sin(a) * d - 12}px`, "--r": `${(i % 2 ? 1 : -1) * (120 + i * 23)}deg`,
+          background: BURST_COLOURS[i % BURST_COLOURS.length], animationDelay: `${(i % 5) * 0.02}s`,
+          borderRadius: i % 3 === 0 ? "50%" : 2,
+        }} />;
+      })}
+    </span>
+  );
+}
+
+/* Medal — gold, silver and bronze discs for the top three; a plain rank
+   after that ("–" for not ranked yet). */
+const MEDALS = { 1: ["#f5c84c", "#7a5200"], 2: ["#c9ccd3", "#3d424b"], 3: ["#d99a62", "#5a300c"] };
+function Medal({ rank, delay = 0 }) {
+  const m = MEDALS[rank];
+  if (!m) {
+    return <span className="mono" style={{ width: 28, textAlign: "center", fontWeight: 700, color: "var(--ink-faint)", flexShrink: 0 }}>{rank ?? "–"}</span>;
+  }
+  return (
+    <span className="pk-medal mono" style={{
+      animationDelay: `${delay}s`, width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+      display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800,
+      background: `radial-gradient(circle at 35% 30%, #fff8, transparent 60%), ${m[0]}`, color: m[1],
+      boxShadow: `0 2px 6px -2px ${m[0]}`,
+    }}>{rank}</span>
+  );
+}
+
+/* Avatar — a player's initial in a tinted circle; the colour follows the
+   handle, so each player keeps theirs. */
+const AVATAR_TONES = ["var(--accent)", "var(--jm)", "var(--intl)", "var(--violet)", "var(--warn)"];
+function Avatar({ handle = "?", size = 44 }) {
+  const n = [...String(handle)].reduce((h, c) => h + c.charCodeAt(0), 0);
+  const tone = AVATAR_TONES[n % AVATAR_TONES.length];
+  return (
+    <span aria-hidden style={{
+      width: size, height: size, borderRadius: "50%", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+      background: `color-mix(in oklab, ${tone} 20%, transparent)`, color: tone, fontWeight: 700, fontSize: size * 0.42,
+    }}>{String(handle).charAt(0).toUpperCase() || "?"}</span>
+  );
+}
+
+/* StatTile — a small figure with a label and an icon, for the Me card. */
+function StatTile({ icon, label, children }) {
+  return (
+    <div style={{ background: "var(--bg-2)", borderRadius: 14, padding: "10px 12px", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, color: "var(--ink-faint)", fontSize: 11.5, fontWeight: 600 }}>
+        <Icon name={icon} size={13} stroke={2} />{label}
+      </div>
+      <div className="mono" style={{ fontSize: 19, fontWeight: 700, marginTop: 4 }}>{children}</div>
+    </div>
+  );
 }
 
 /* ProbBar — one option's share as a bar. mark: your forecast, as a tick on
@@ -762,15 +882,16 @@ function ProbBar({ label, value, mark, win, delay = 0 }) {
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
-        <span style={{ color: win ? "var(--ok)" : "var(--ink-dim)", fontWeight: win ? 600 : 500, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {win && "✓ "}{label}
+        <span style={{ display: "flex", alignItems: "center", gap: 5, color: win ? "var(--ok)" : "var(--ink-dim)", fontWeight: win ? 600 : 500, minWidth: 0 }}>
+          {win && <Icon name="checkCircle" size={14} stroke={2.2} className="pk-pop" />}
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
         </span>
         <span className="mono" style={{ color: "var(--ink)" }}>{Math.round(value)}%</span>
       </div>
       <div style={{ position: "relative", height: 6, borderRadius: 3, background: "var(--fill)", marginTop: 4 }}>
         <div className="pk-grow-x" style={{ animationDelay: `${delay}s`, width: `${value}%`, height: "100%", borderRadius: 3, background: win ? "var(--ok)" : "var(--accent)" }} />
         {mark != null && (
-          <span title={`You: ${mark}%`} style={{ position: "absolute", top: -3, left: `calc(${mark}% - 1px)`, width: 2, height: 12, borderRadius: 1, background: "var(--ink)" }} />
+          <span title={`You: ${mark}%`} className="pk-pop" style={{ animationDelay: `${delay + 0.35}s`, position: "absolute", top: -3, left: `calc(${mark}% - 1px)`, width: 2, height: 12, borderRadius: 1, background: "var(--ink)" }} />
         )}
       </div>
     </div>
@@ -817,5 +938,6 @@ Object.assign(window, {
   askConfirm, ConfirmHost, ModalFrame, ModalHead, XIcon, ChevronIcon, FoldChevron, ChoiceCard,
   springTo, useModalDismiss, openBackLayer, closeBackLayer,
   copyText, downloadBlob, shareText, appUrl,
-  Tag, RegionTag, FieldLabel, SwitchRow, EmptyNote, ProbBar, AppFooter,
+  Tag, RegionTag, CategoryTag, FieldLabel, SwitchRow, EmptyNote, ProbBar, AppFooter,
+  Spinner, SkeletonRows, Burst, Medal, Avatar, StatTile,
 });

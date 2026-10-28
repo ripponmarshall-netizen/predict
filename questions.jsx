@@ -1,11 +1,16 @@
 /* questions.jsx — the question list (Jamaica / International) and a
-   question's sheet: make a forecast, see the crowd, the result and your
-   points, share your call. Admins also record, close and resolve here. */
+   question's sheet: make a call, see the crowd, the result and your points,
+   share your call. Admins also close and resolve here. */
 const { useState: useStateQ, useMemo: useMemoQ } = React;
 
-const REGION_FILTERS = [...REGIONS.map((r) => ({ v: r.v, l: r.l })), { v: "all", l: "All" }];
+const REGION_FILTERS = [
+  ...REGIONS.map((r) => ({ v: r.v, l: <IconLabel icon={r.icon} size={14} gap={5}>{r.l}</IconLabel> })),
+  { v: "all", l: <IconLabel icon="list" size={14} gap={5}>All</IconLabel> },
+];
+const DAY_MS = 86400000;
+const PHASE_ICONS = { open: "clock", closed: "lock", resolved: "checkCircle", void: "ban", disputed: "flag" };
 
-function QuestionsView({ state, scores, now, region, setRegion, onOpen, onProfile, onDismissSample, onRemoveSample }) {
+function QuestionsView({ state, scores, now, region, setRegion, onOpen, onProfile, onSignIn, onRetry, onDismissSample, onRemoveSample }) {
   const me = state.players.find((p) => p.id === ME);
   const shown = state.questions.filter((q) => region === "all" || q.region === region);
   const byClose = (a, b) => Date.parse(a.closeAt) - Date.parse(b.closeAt);
@@ -13,7 +18,13 @@ function QuestionsView({ state, scores, now, region, setRegion, onOpen, onProfil
   const waiting = shown.filter((q) => ["closed", "disputed"].includes(phase(q, now))).sort(byClose);
   const done = shown.filter((q) => ["resolved", "void"].includes(q.status))
     .sort((a, b) => Date.parse(b.resolvedAt || b.closeAt) - Date.parse(a.resolvedAt || a.closeAt));
-  const row = (q) => <QuestionRow key={q.id} q={q} state={state} scores={scores} now={now} onOpen={() => onOpen(q.id)} />;
+  const rows = (list) => (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 8 }}>
+      {list.map((q, i) => <QuestionRow key={q.id} q={q} scores={scores} now={now} index={i} onOpen={() => onOpen(q.id)} />)}
+    </div>
+  );
+  const firstLoad = state.online && state.loading && !state.questions.length;
+  const offline = state.online && state.syncError && !state.questions.length;
   return (
     <main className="pk-view pk-page" style={{ padding: "16px 20px 0" }}>
       <div style={{ marginBottom: 14 }}>
@@ -22,70 +33,90 @@ function QuestionsView({ state, scores, now, region, setRegion, onOpen, onProfil
 
       {state.sampleNotice && hasSample(state) && (
         <Card style={{ background: "color-mix(in oklab, var(--accent) 10%, var(--bg-1))" }}>
-          <div style={{ fontSize: 14.5, fontWeight: 600 }}>Sample questions loaded</div>
-          <div style={{ fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.5, marginTop: 4 }}>
+          <SectionHead icon="sparkle" title="Sample questions loaded" />
+          <div style={{ fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.5, marginTop: -4 }}>
             The questions and players marked <Tag>Sample</Tag> are here so you can try {APP_NAME}. Their dates are placeholders. One question is closed and waiting for a result: resolve it in Admin to see the scoring.
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button onClick={onDismissSample} style={ghostBtn()}>Got it</button>
-            <button onClick={onRemoveSample} style={ghostBtn()}>Remove samples</button>
+            <button onClick={onDismissSample} style={ghostBtn()}><IconLabel icon="check">Got it</IconLabel></button>
+            <button onClick={onRemoveSample} style={ghostBtn()}><IconLabel icon="trash">Remove samples</IconLabel></button>
           </div>
         </Card>
       )}
 
-      {me && me.handle === "you" && (
-        <Card>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 600 }}>Join the leaderboard</div>
-              <div style={{ fontSize: 13, color: "var(--ink-dim)", marginTop: 2 }}>Pick a handle and your parish.</div>
-            </div>
-            <button onClick={onProfile} style={accentBtn()}>Set up</button>
-          </div>
-        </Card>
-      )}
+      {state.signedOut ? (
+        <JoinCard icon="logIn" title="Sign in to play" detail="Make your calls, score points, climb the table." action="Sign in" onClick={onSignIn} />
+      ) : (state.needsProfile || (!state.online && me && me.handle === "you")) ? (
+        <JoinCard icon="user" title="Join the leaderboard" detail="Pick a handle and your parish." action="Set up" onClick={onProfile} />
+      ) : null}
 
       <Card>
-        <SectionHead title="Open" subtitle={open.length ? "Make your call before it closes. Your latest call counts." : null} />
-        {open.length ? <div style={{ display: "grid", gap: 8 }}>{open.map(row)}</div> : <EmptyNote>No open questions here yet.</EmptyNote>}
+        <SectionHead icon="dial" title="Open" subtitle={open.length ? "Make your call before it closes. Your latest call counts." : null} />
+        {firstLoad ? <SkeletonRows /> : offline ? (
+          <EmptyNote icon="cloudOff">
+            Couldn't reach {APP_NAME}. Check your connection.
+            <div style={{ marginTop: 10 }}><button onClick={onRetry} style={ghostBtn()}><IconLabel icon="refresh">Try again</IconLabel></button></div>
+          </EmptyNote>
+        ) : open.length ? rows(open) : <EmptyNote icon="inbox">No open questions here yet. New ones land every week.</EmptyNote>}
       </Card>
 
       {waiting.length > 0 && (
         <Card>
-          <SectionHead title="Awaiting result" subtitle="Closed. Each resolves from its named source." />
-          <div style={{ display: "grid", gap: 8 }}>{waiting.map(row)}</div>
+          <SectionHead icon="hourglass" tone="var(--intl)" title="Awaiting result" subtitle="Closed. Each resolves from its named source." />
+          {rows(waiting)}
         </Card>
       )}
 
       {done.length > 0 && (
         <Card>
-          <SectionHead title="Results" />
-          <div style={{ display: "grid", gap: 8 }}>{done.map(row)}</div>
+          <SectionHead icon="checkCircle" tone="var(--ok)" title="Results" />
+          {rows(done)}
         </Card>
       )}
     </main>
   );
 }
 
-/* One question in a list: tags, the question, your call or your points. */
-function QuestionRow({ q, state, scores, now, onOpen }) {
+function JoinCard({ icon, title, detail, action, onClick }) {
+  return (
+    <Card style={{ background: "linear-gradient(135deg, color-mix(in oklab, var(--accent) 14%, var(--bg-1)), var(--bg-1) 70%)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <span className="pk-float" style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--accent)", color: "var(--accent-ink)" }}>
+          <Icon name={icon} size={20} stroke={2} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 600 }}>{title}</div>
+          <div style={{ fontSize: 13, color: "var(--ink-dim)", marginTop: 2 }}>{detail}</div>
+        </div>
+        <button onClick={onClick} style={accentBtn()}>{action}</button>
+      </div>
+    </Card>
+  );
+}
+
+/* One question in a list: tags, the question, when it closes, your call or
+   your points. */
+function QuestionRow({ q, scores, now, onOpen, index = 0 }) {
   const ph = phase(q, now);
   const mine = scores.latest.get(q.id)?.get(ME);
-  const count = scores.latest.get(q.id)?.size || 0;
+  const count = scores.crowds.get(q.id)?.count || 0;
   const pts = scores.byQuestion.get(q.id)?.get(ME);
+  const soon = ph === "open" && Date.parse(q.closeAt) - now < DAY_MS;
   return (
-    <button onClick={onOpen} className="pk-wide-btn" style={{
+    <button onClick={onOpen} className="pk-wide-btn pk-row-in" style={{
+      animationDelay: `${Math.min(index, 8) * 0.04}s`,
       display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: "var(--ink)",
       background: "var(--bg-2)", border: "1px solid transparent", borderRadius: 14, padding: "12px 14px",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <RegionTag region={q.region} />
-        <Tag>{q.category}</Tag>
+        <CategoryTag category={q.category} />
         {q.sample && <Tag>Sample</Tag>}
       </div>
       <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.35, marginTop: 8 }}>{q.title}</div>
-      <div style={{ fontSize: 12.5, marginTop: 4, color: ph === "disputed" ? "var(--warn)" : "var(--ink-faint)" }}>
-        {phaseLabel(q, now)} · {count} {count === 1 ? "call" : "calls"}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, marginTop: 5, color: ph === "disputed" ? "var(--warn)" : soon ? "var(--accent)" : "var(--ink-faint)" }}>
+        {soon ? <span className="pk-pulse-dot" aria-hidden /> : <Icon name={PHASE_ICONS[ph]} size={13} stroke={2} />}
+        <span>{phaseLabel(q, now)} · {count} {count === 1 ? "call" : "calls"}</span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line-soft)", fontSize: 13, color: "var(--ink-dim)" }}>
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -93,7 +124,13 @@ function QuestionRow({ q, state, scores, now, onOpen }) {
             ? <>Your call: <strong style={{ color: "var(--ink)" }}>{fmtForecast(q, mine.probs)}</strong></>
             : ph === "open" ? <span style={{ color: "var(--accent)", fontWeight: 600 }}>Make your call</span> : "No call from you"}
         </span>
-        {pts && <span className="mono" style={{ fontWeight: 700, color: pts.points >= 0 ? "var(--ok)" : "var(--bad)" }}>{fmtPts(pts.points)}</span>}
+        {pts && (
+          <span className="mono pk-pop" style={{
+            display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 700, fontSize: 12.5, padding: "2px 8px", borderRadius: 999,
+            color: pts.points >= coinFlipPoints(q.options.length) ? "var(--ok)" : "var(--ink-dim)",
+            background: pts.points >= coinFlipPoints(q.options.length) ? "color-mix(in oklab, var(--ok) 14%, transparent)" : "var(--fill)",
+          }}><Icon name="trophy" size={12} stroke={2.2} />{fmtPts(pts.points)}</span>
+        )}
         <span style={{ color: "var(--ink-faint)", display: "inline-flex" }}><ChevronIcon size={12} /></span>
       </div>
     </button>
@@ -115,7 +152,7 @@ function ForecastInput({ q, probs, onChange }) {
       <div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
           <div>
-            <span className="mono" style={{ fontSize: 40, fontWeight: 700, letterSpacing: "-0.02em" }}>{yes}%</span>
+            <span key={yes} className="mono pk-tick-in" style={{ fontSize: 40, fontWeight: 700, letterSpacing: "-0.02em" }}>{yes}%</span>
             <span style={{ fontSize: 15, fontWeight: 600, color: "var(--ink-dim)", marginLeft: 6 }}>Yes</span>
           </div>
           <span className="mono" style={{ fontSize: 13, color: "var(--ink-faint)" }}>{100 - yes}% No</span>
@@ -156,6 +193,12 @@ function ForecastInput({ q, probs, onChange }) {
               border: `1.5px solid ${active ? "var(--accent)" : "transparent"}`,
               transition: "background 0.15s, border-color 0.15s, var(--press)",
             }}>
+              <span aria-hidden className={active ? "pk-check is-on" : "pk-check"} style={{
+                width: 20, height: 20, borderRadius: "50%", flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                border: `1.5px solid ${active ? "var(--accent)" : "var(--ink-faint)"}`, background: active ? "var(--accent)" : "transparent",
+              }}>
+                {active && <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="var(--accent-ink)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path className="pk-tick" d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>}
+              </span>
               <span style={{ flex: 1, minWidth: 0 }}>{o}</span>
               {probs && <span className="mono" style={{ fontSize: 13, color: active ? "var(--accent)" : "var(--ink-faint)" }}>{probs[i]}%</span>}
             </button>
@@ -163,10 +206,10 @@ function ForecastInput({ q, probs, onChange }) {
         })}
       </div>
       {cur && (
-        <div style={{ marginTop: 14 }}>
+        <div className="pk-slide-in" style={{ marginTop: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
             <span className="label">How sure?</span>
-            <span className="mono" style={{ fontSize: 22, fontWeight: 700 }}>{probs[pick]}%</span>
+            <span key={probs[pick]} className="mono pk-tick-in" style={{ fontSize: 22, fontWeight: 700 }}>{probs[pick]}%</span>
           </div>
           <input type="range" className="pk-slider" min={min} max="100" step="1" value={probs[pick]} aria-label="How sure"
             onChange={(e) => onChange(pickProbs(n, pick, Number(e.target.value)))}
@@ -180,60 +223,91 @@ function ForecastInput({ q, probs, onChange }) {
 
 /* ---------- question sheet ---------- */
 
-function QuestionSheet({ q, state, scores, now, adminOpen, onClose, act }) {
+function QuestionSheet({ q, state, scores, now, api, run, adminOpen, onClose, onSignIn, onProfile }) {
   const { ref, closing, close } = useModalDismiss(onClose);
   const ph = phase(q, now);
-  const latest = scores.latest.get(q.id);
-  const mine = latest?.get(ME);
+  const mine = scores.latest.get(q.id)?.get(ME);
   const myCount = state.forecasts.filter((f) => f.playerId === ME && f.questionId === q.id).length;
   const [draft, setDraft] = useStateQ(mine ? mine.probs : q.kind === "binary" ? [50, 50] : null);
-  const crowd = crowdOf(latest, q.options.length);
+  const [saving, setSaving] = useStateQ(false);
+  const [saved, setSaved] = useStateQ(false);
+  const crowd = scores.crowds.get(q.id) || { count: 0, probs: null };
   const pts = scores.byQuestion.get(q.id)?.get(ME);
   const changed = draft && (!mine || draft.join() !== mine.probs.join());
-  const save = () => {
-    if (act((s) => addForecast(s, { playerId: ME, questionId: q.id, probs: draft }, Date.now()))) {
-      showToast(mine ? "Forecast updated" : "Forecast saved", { action: { label: "Share", onClick: () => shareText(shareCallText(q, draft, appUrl())) } });
-    }
+  const save = async () => {
+    if (state.signedOut) { onSignIn(); return; }
+    // Online, points show under your handle: pick one before the first call.
+    if (state.needsProfile) { onProfile(); return; }
+    const probs = draft;
+    setSaving(true);
+    const ok = await run(() => api.forecast(q.id, probs));
+    setSaving(false);
+    if (!ok) return;
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+    showToast(mine ? "Call updated" : "Call saved", { tone: "ok", action: { label: "Share", onClick: () => shareText(shareCallText(q, probs, appUrl())) } });
   };
-  const showCrowd = crowd.count > 0 && (mine || ph !== "open");
+  const showCrowd = crowd.count > 0 && crowd.probs && (mine || ph !== "open");
   const lastLog = state.log.find((l) => l.questionId === q.id && ["resolve", "void", "dispute"].includes(l.action));
+  const great = pts && pts.points >= 90;
   return (
     <ModalFrame sheet dismiss={{ ref, closing, close }} label={q.title}>
       <ModalHead title={q.title} onClose={close}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
           <RegionTag region={q.region} />
-          <Tag>{q.category}</Tag>
+          <CategoryTag category={q.category} />
           {q.sample && <Tag>Sample</Tag>}
         </div>
       </ModalHead>
 
-      <div style={{ fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.6 }}>
-        <div>{ph === "open" ? "Closes" : "Closed"} <strong style={{ color: "var(--ink)" }}>{fmtWhen(q.closeAt)}</strong> Jamaica time</div>
-        <div>
-          Resolves from {q.sourceUrl
+      <div style={{ display: "grid", gap: 6, fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name={ph === "open" ? "clock" : "lock"} size={15} />
+          <span>{ph === "open" ? "Closes" : "Closed"} <strong style={{ color: "var(--ink)" }}>{fmtWhen(q.closeAt)}</strong> Jamaica time</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="link" size={15} />
+          <span>Resolves from {q.sourceUrl
             ? <a href={q.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--ink)" }}>{q.sourceName}</a>
-            : <span style={{ color: "var(--ink)" }}>{q.sourceName}</span>}
+            : <span style={{ color: "var(--ink)" }}>{q.sourceName}</span>}</span>
         </div>
       </div>
 
       {ph === "resolved" && (
-        <ResultBox tone="var(--ok)" title={`Result: ${q.options[q.outcome]}`}>
-          {pts ? <>You scored <strong className="mono" style={{ color: pts.points >= 0 ? "var(--ok)" : "var(--bad)" }}>{fmtPts(pts.points)}</strong> (Brier {fmtBrier(pts.brier)}).</> : "You didn't make a call on this one."}
-          {lastLog?.sourceUrl && <> <a href={lastLog.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>Source</a></>}
+        <ResultBox tone="var(--ok)" icon="checkCircle" title={`Result: ${q.options[q.outcome]}`}>
+          {pts ? (
+            <div style={{ position: "relative", display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
+              {great && <Burst />}
+              <span style={{ fontSize: 32, fontWeight: 800, color: "var(--ink)", letterSpacing: "-0.02em" }}>
+                <AnimatedNumber value={pts.points} from={0} format={fmtPts} durationMs={700} />
+              </span>
+              <span>points{great ? ". Sharp call!" : ""} <span style={{ color: "var(--ink-faint)" }}>Brier {fmtBrier(pts.brier)}</span></span>
+            </div>
+          ) : "You didn't make a call on this one."}
+          {lastLog?.sourceUrl && (
+            <a href={lastLog.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ display: "flex", width: "fit-content", alignItems: "center", gap: 5, marginTop: 6, color: "inherit" }}>
+              <Icon name="link" size={13} /> Source
+            </a>
+          )}
         </ResultBox>
       )}
-      {ph === "void" && <ResultBox tone="var(--ink-dim)" title="Void: no points for anyone">{lastLog?.note}</ResultBox>}
-      {ph === "disputed" && <ResultBox tone="var(--warn)" title="Disputed: points on hold">{lastLog?.note ? `${lastLog.note}. ` : ""}The source is being checked before a result is settled.</ResultBox>}
-      {ph === "closed" && <ResultBox tone="var(--ink-dim)" title="Closed: awaiting the result">Calls are locked in. Points come when it resolves.</ResultBox>}
+      {ph === "void" && <ResultBox tone="var(--ink-dim)" icon="ban" title="Void: no points for anyone">{lastLog?.note}</ResultBox>}
+      {ph === "disputed" && <ResultBox tone="var(--warn)" icon="flag" title="Disputed: points on hold">{lastLog?.note ? `${lastLog.note}. ` : ""}The source is being checked before a result is settled.</ResultBox>}
+      {ph === "closed" && <ResultBox tone="var(--intl)" icon="hourglass" title="Closed: awaiting the result">Calls are locked in. Points come when it resolves.</ResultBox>}
 
       {ph === "open" && (
         <div style={{ marginTop: 16, padding: 14, borderRadius: 16, background: "var(--bg-2)" }}>
           <ForecastInput q={q} probs={draft} onChange={setDraft} />
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <button onClick={save} disabled={!changed} style={{ ...primaryBtn(), flex: 1, padding: "12px 16px", fontSize: 15, opacity: changed ? 1 : 0.45 }}>
-              {mine ? "Update forecast" : "Save forecast"}
-            </button>
-          </div>
+          <button onClick={save} disabled={(!changed && !state.signedOut) || saving} style={{
+            ...(saved ? { ...primaryBtn(), background: "var(--ok)", color: "#fff" } : primaryBtn()),
+            width: "100%", marginTop: 14, padding: "12px 16px", fontSize: 15,
+            opacity: changed || saved || saving || state.signedOut ? 1 : 0.45, transition: "background 0.25s, color 0.25s, var(--press)",
+          }}>
+            {saving ? <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Spinner size={16} />Saving…</span>
+              : saved ? <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Icon name="check" size={17} stroke={2.6} className="pk-done-tick" />Saved</span>
+              : state.signedOut ? <IconLabel icon="logIn">Sign in to make your call</IconLabel>
+              : mine ? "Update your call" : "Save your call"}
+          </button>
         </div>
       )}
 
@@ -243,12 +317,12 @@ function QuestionSheet({ q, state, scores, now, adminOpen, onClose, act }) {
             Your call: <strong style={{ color: "var(--ink)" }}>{fmtForecast(q, mine.probs)}</strong>, {fmtWhen(mine.createdAt)}
             {myCount > 1 && <span style={{ color: "var(--ink-faint)" }}> · updated {myCount - 1}×, the latest before close counts</span>}
           </div>
-          <button onClick={() => shareText(shareCallText(q, mine.probs, appUrl()))} style={ghostBtn()}>Share</button>
+          <button onClick={() => shareText(shareCallText(q, mine.probs, appUrl()))} style={ghostBtn()}><IconLabel icon="share">Share</IconLabel></button>
         </div>
       )}
 
       <div style={{ marginTop: 18 }}>
-        <div className="label">Crowd · {crowd.count} {crowd.count === 1 ? "call" : "calls"}</div>
+        <div className="label" style={{ display: "flex", alignItems: "center", gap: 6 }}><Icon name="users" size={14} />Crowd · {crowd.count} {crowd.count === 1 ? "call" : "calls"}</div>
         {showCrowd
           ? q.options.map((o, i) => (
               <ProbBar key={i} label={o} value={crowd.probs[i]} mark={mine ? mine.probs[i] : null} win={ph === "resolved" && q.outcome === i} delay={i * 0.05} />
@@ -257,15 +331,17 @@ function QuestionSheet({ q, state, scores, now, adminOpen, onClose, act }) {
         {showCrowd && mine && <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>The thin line on each bar is your call.</div>}
       </div>
 
-      {state.admin && <AdminTools q={q} state={state} now={now} startOpen={adminOpen} act={act} onDeleted={close} />}
+      {state.admin && <AdminTools q={q} state={state} now={now} api={api} run={run} startOpen={adminOpen} onDeleted={close} />}
     </ModalFrame>
   );
 }
 
-function ResultBox({ tone, title, children }) {
+function ResultBox({ tone, icon, title, children }) {
   return (
-    <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 14, background: `color-mix(in oklab, ${tone} 12%, var(--bg-2))`, border: `1px solid color-mix(in oklab, ${tone} 30%, transparent)` }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: tone }}>{title}</div>
+    <div className="pk-pop" style={{ display: "block", marginTop: 14, padding: "12px 14px", borderRadius: 14, background: `color-mix(in oklab, ${tone} 12%, var(--bg-2))`, border: `1px solid color-mix(in oklab, ${tone} 30%, transparent)` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 15, fontWeight: 700, color: tone }}>
+        {icon && <Icon name={icon} size={17} stroke={2.1} />}{title}
+      </div>
       {children && <div style={{ fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.5, marginTop: 4 }}>{children}</div>}
     </div>
   );
@@ -273,42 +349,52 @@ function ResultBox({ tone, title, children }) {
 
 /* ---------- admin tools on a question ---------- */
 
-/* Record a player's call (running a WhatsApp league by hand), close early,
-   resolve with a source link, dispute or void (SOP: resolution incident). */
-function AdminTools({ q, state, now, startOpen, act, onDeleted }) {
+/* Close early, resolve with a source link, dispute or void (SOP:
+   resolution incident). On the phone only: record a player's call (for a
+   league run in WhatsApp) and delete a question. */
+function AdminTools({ q, state, now, api, run, startOpen, onDeleted }) {
   const [open, setOpen] = useStateQ(!!startOpen);
+  const [busy, setBusy] = useStateQ(false);
   const ph = phase(q, now);
+  const closed = isClosed(q, now);
+  const live = q.status === "open" || q.status === "disputed";
   const others = state.players.filter((p) => p.id !== ME);
   const [playerId, setPlayerId] = useStateQ(others[0]?.id || "");
   const [proxy, setProxy] = useStateQ(q.kind === "binary" ? [50, 50] : null);
   const [outcome, setOutcome] = useStateQ(null);
   const [link, setLink] = useStateQ(q.sourceUrl || "");
   const [note, setNote] = useStateQ("");
-  const t = () => Date.now();
-  const scoredCount = useMemoQ(() => latestForecasts(state.forecasts, [q]).get(q.id)?.size || 0, [state.forecasts, q]);
+  const callCount = useMemoQ(() => latestForecasts(state.forecasts, [q]).get(q.id)?.size || 0, [state.forecasts, q]);
+  const go = async (fn, ok) => {
+    setBusy(true);
+    const done = await run(fn, ok);
+    setBusy(false);
+    return done;
+  };
 
   const record = () => {
     const p = state.players.find((x) => x.id === playerId);
-    if (act((s) => addForecast(s, { playerId, questionId: q.id, probs: proxy, by: "admin" }, t()), `Recorded ${p?.handle}'s call`)) {
-      setProxy(q.kind === "binary" ? [50, 50] : null);
-    }
+    go(() => api.recordFor(playerId, q.id, proxy), `Recorded ${p?.handle}'s call`).then((ok) => {
+      if (ok) setProxy(q.kind === "binary" ? [50, 50] : null);
+    });
   };
   const resolve = () => {
-    if (outcome == null) { showToast("Pick the outcome."); return; }
+    if (outcome == null) { showToast("Pick the outcome.", { tone: "error" }); return; }
     askConfirm({
       title: `Resolve as "${q.options[outcome]}"?`,
-      body: `${scoredCount} ${scoredCount === 1 ? "call is" : "calls are"} scored now. You can dispute it later if the source turns out wrong.`,
+      body: state.online
+        ? "Every call is scored now. You can dispute it later if the source turns out wrong."
+        : `${callCount} ${callCount === 1 ? "call is" : "calls are"} scored now. You can dispute it later if the source turns out wrong.`,
       confirmLabel: "Resolve",
-    }).then((ok) => { if (ok) act((s) => resolveQuestion(s, q.id, outcome, { sourceUrl: link, note }, t()), "Resolved and scored"); });
+    }).then((ok) => { if (ok) go(() => api.resolve(q.id, outcome, { sourceUrl: link, note }), "Resolved and scored"); });
   };
-  const dispute = () => act((s) => disputeQuestion(s, q.id, note, t()), "Marked disputed. Points on hold.");
   const voidIt = () => {
     askConfirm({ title: "Void this question?", body: "No one gets points for it. This can't be undone.", confirmLabel: "Void", danger: true })
-      .then((ok) => { if (ok) act((s) => voidQuestion(s, q.id, { sourceUrl: link, note }, t()), "Question void"); });
+      .then((ok) => { if (ok) go(() => api.void(q.id, { sourceUrl: link, note }), "Question void"); });
   };
   const remove = () => {
     askConfirm({ title: "Delete this question?", body: "Its calls and log go with it. This can't be undone.", confirmLabel: "Delete", danger: true })
-      .then((ok) => { if (ok && act((s) => deleteQuestion(s, q.id), "Question deleted")) onDeleted(); });
+      .then((ok) => { if (ok) go(() => api.remove(q.id), "Question deleted").then((done) => { if (done) onDeleted(); }); });
   };
   const field = { className: "pk-field" };
   return (
@@ -317,14 +403,15 @@ function AdminTools({ q, state, now, startOpen, act, onDeleted }) {
         display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 0", background: "transparent", border: "none",
         color: "var(--ink)", fontFamily: "inherit", fontSize: 15, fontWeight: 600, cursor: "pointer", textAlign: "left",
       }}>
+        <span style={{ color: "var(--accent)", display: "inline-flex" }}><Icon name="shield" size={18} /></span>
         <span style={{ flex: 1 }}>Admin</span>
         <FoldChevron open={open} />
       </button>
       <Collapse open={open}>
         <div style={{ display: "grid", gap: 16, paddingBottom: 4 }}>
-          {ph === "open" && (
+          {ph === "open" && api.recordFor && (
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Record a player's call</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600 }}><Icon name="users" size={16} />Record a player's call</div>
               <div style={{ fontSize: 12.5, color: "var(--ink-faint)", margin: "2px 0 10px" }}>For calls made in WhatsApp. Add players in Admin → Players.</div>
               {others.length ? (
                 <>
@@ -332,20 +419,20 @@ function AdminTools({ q, state, now, startOpen, act, onDeleted }) {
                     {others.map((p) => <option key={p.id} value={p.id}>{p.handle}{p.sample ? " (sample)" : ""}</option>)}
                   </select>
                   <div style={{ marginTop: 12 }}><ForecastInput key={playerId} q={q} probs={proxy} onChange={setProxy} /></div>
-                  <button onClick={record} disabled={!proxy} style={{ ...ghostBtn(), marginTop: 12, opacity: proxy ? 1 : 0.45 }}>Record call</button>
+                  <button onClick={record} disabled={!proxy || busy} style={{ ...ghostBtn(), marginTop: 12, opacity: proxy ? 1 : 0.45 }}><IconLabel icon="plus">Record call</IconLabel></button>
                 </>
               ) : <div style={{ fontSize: 13, color: "var(--ink-dim)" }}>No other players yet.</div>}
             </div>
           )}
 
-          {ph === "open" && (
+          {live && !closed && (
             <div>
-              <button onClick={() => act((s) => closeQuestion(s, q.id, t()), "Closed. Calls are locked in.")} style={ghostBtn()}>Close now</button>
+              <button onClick={() => go(() => api.close(q.id), "Closed. Calls are locked in.")} disabled={busy} style={ghostBtn()}><IconLabel icon="lock">Close now</IconLabel></button>
               <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 6 }}>Locks calls before {fmtWhen(q.closeAt)}, e.g. if the event starts early.</div>
             </div>
           )}
 
-          {(ph === "closed" || ph === "disputed") && (
+          {live && closed && (
             <div>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Result</div>
               <div role="radiogroup" style={{ display: "grid", gap: 6 }}>
@@ -367,16 +454,19 @@ function AdminTools({ q, state, now, startOpen, act, onDeleted }) {
                 <textarea id={`note-${q.id}`} {...field} rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. BOJ held at 6.00%" />
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {(ph === "closed" || ph === "disputed") && <button onClick={resolve} style={primaryBtn()}>Resolve</button>}
-                {ph !== "disputed" && <button onClick={dispute} style={ghostBtn()}>Mark disputed</button>}
-                <button onClick={voidIt} style={{ ...ghostBtn(), color: "var(--bad)" }}>Void</button>
+                {live && closed && <button onClick={resolve} disabled={busy} style={primaryBtn()}><IconLabel icon="checkCircle">Resolve</IconLabel></button>}
+                {ph !== "disputed" && <button onClick={() => go(() => api.dispute(q.id, note), "Marked disputed. Points on hold.")} disabled={busy} style={ghostBtn()}><IconLabel icon="flag">Mark disputed</IconLabel></button>}
+                <button onClick={voidIt} disabled={busy} style={{ ...ghostBtn(), color: "var(--bad)" }}><IconLabel icon="ban">Void</IconLabel></button>
+                {busy && <Spinner size={18} style={{ alignSelf: "center", color: "var(--ink-faint)" }} />}
               </div>
             </div>
           )}
 
-          <div>
-            <button onClick={remove} style={{ ...linkBtn(13), color: "var(--bad)" }}>Delete question</button>
-          </div>
+          {api.remove && (
+            <div>
+              <button onClick={remove} disabled={busy} style={{ ...linkBtn(13), color: "var(--bad)", display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="trash" size={14} />Delete question</button>
+            </div>
+          )}
         </div>
       </Collapse>
     </div>

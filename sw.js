@@ -1,15 +1,18 @@
 "use strict";
 
 // Bump this on each deploy to bust the cache
-const CACHE = "predikt-v1";
+const CACHE = "predikt-v2";
 const FONT_CACHE = "predikt-fonts-v1";
 
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
+  "./config.js",
   "./styles.css",
   "./helpers.jsx",
+  "./data.jsx",
+  "./icons.jsx",
   "./components.jsx",
   "./questions.jsx",
   "./leaderboard.jsx",
@@ -26,11 +29,12 @@ const ASSETS = [
 // React + Babel load from a CDN at pinned versions (see index.html). Without
 // caching them the app can't start offline, so they are precached too.
 const CDN_ASSETS = [
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js",
   "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
   "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
   "https://unpkg.com/@babel/standalone@7.29.0/babel.min.js",
 ];
-const CDN_HOSTS = new Set(["unpkg.com"]);
+const CDN_HOSTS = new Set(["unpkg.com", "cdn.jsdelivr.net"]);
 
 // Cache each file on its own: cache.addAll() is all-or-nothing, so one
 // failed download would otherwise leave nothing cached at all.
@@ -96,6 +100,29 @@ self.addEventListener("fetch", (e) => {
           return cached || networkFetch;
         }),
       ),
+    );
+    return;
+  }
+
+  // Anything else from another site (the Supabase API above all) goes
+  // straight to the network: live data is never served from a cache.
+  if (url.origin !== self.location.origin && !CDN_HOSTS.has(url.hostname)) {
+    return;
+  }
+
+  // config.js says which database to use: network-first, so a change to it
+  // reaches installed copies without waiting for a new cache version.
+  if (url.pathname.endsWith("/config.js")) {
+    e.respondWith(
+      fetch(e.request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put("./config.js", copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match("./config.js")),
     );
     return;
   }

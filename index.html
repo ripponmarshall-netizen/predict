@@ -122,6 +122,13 @@
     <div id="root"></div>
     <noscript>Predikt needs JavaScript turned on.</noscript>
 
+    <!-- Where the data lives (Supabase), and the client for it. -->
+    <script src="config.js"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"
+      integrity="sha384-BWcjm9OdFth9TbhCxZPdm+gAOUMAzQy9nmTs12ioXdCcbVnJaPMn+fMUoQCLt60R"
+      crossorigin="anonymous"
+    ></script>
     <script
       src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
       integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
@@ -141,6 +148,8 @@
     <!-- Order matters: each file uses what the ones above it define.
          Add a new screen above app.jsx, and to ASSETS in sw.js. -->
     <script type="text/babel" src="helpers.jsx"></script>
+    <script type="text/babel" src="data.jsx"></script>
+    <script type="text/babel" src="icons.jsx"></script>
     <script type="text/babel" src="components.jsx"></script>
     <script type="text/babel" src="questions.jsx"></script>
     <script type="text/babel" src="leaderboard.jsx"></script>

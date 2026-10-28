@@ -1,15 +1,21 @@
 {
   "name": "predikt",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "test": "node predikt.test.js && node check-jsx.js",
+    "e2e": "node tests/e2e.js",
     "lint": "eslint .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@babel/standalone": "7.29.0",
+    "@supabase/supabase-js": "2.117.3",
     "eslint": "^9.26.0",
-    "prettier": "^3.5.3"
+    "pg": "8.16.3",
+    "playwright": "1.63.0",
+    "prettier": "^3.5.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   }
 }

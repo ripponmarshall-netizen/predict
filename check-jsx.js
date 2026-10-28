@@ -31,6 +31,8 @@ for (const f of loaded)
   if (!fs.existsSync(path.join(root, f)))
     problems.push(`index.html loads ${f}, which doesn't exist`);
 if (loaded[0] !== "helpers.jsx") problems.push("helpers.jsx must load first");
+if (!/<script src="config\.js"><\/script>/.test(html))
+  problems.push("index.html doesn't load config.js");
 if (loaded[loaded.length - 1] !== "app.jsx")
   problems.push("app.jsx must load last");
 
@@ -44,7 +46,13 @@ const assets = [
     )
     .matchAll(/"\.\/([^"]*)"/g),
 ].map((m) => m[1]);
-for (const f of [...jsx, "index.html", "styles.css", "manifest.json"]) {
+for (const f of [
+  ...jsx,
+  "index.html",
+  "styles.css",
+  "manifest.json",
+  "config.js",
+]) {
   if (!assets.includes(f)) problems.push(`sw.js ASSETS is missing ./${f}`);
 }
 for (const f of assets)

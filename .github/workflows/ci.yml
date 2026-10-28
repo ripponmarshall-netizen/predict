@@ -11,18 +11,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm ci
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
 
-  # supabase/schema.sql against a real Postgres, with the checks in test.sql.
+  # supabase/schema.sql on the same Postgres as the Supabase project, with
+  # the checks in test.sql.
   schema:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -35,6 +36,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ./supabase/test.sh
+        env:
+          PGHOST: localhost
+          PGUSER: postgres
+          PGPASSWORD: postgres
+
+  # The app in Chromium at iPhone size: phone mode, then online against a
+  # stand-in Supabase on Postgres (tests/e2e.js).
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
         env:
           PGHOST: localhost
           PGUSER: postgres
