@@ -1,12 +1,12 @@
 -- Predikt: Supabase schema (Postgres 15+).
--- For when the app goes online. Paste into Supabase → SQL Editor and run it
--- once on a new project. supabase/test.sh runs it against plain Postgres
--- with the checks in test.sql.
+-- The online database. To set up a new project, paste this into Supabase →
+-- SQL Editor and run it once. supabase/test.sh runs it against plain
+-- Postgres with the checks in test.sql.
 --
 -- The same rules as helpers.jsx:
 --   * a forecast is whole percentages, one per option, adding up to 100
 --   * a player's latest forecast before the question closes counts
---   * Brier score; points = 100 × (1 − Brier ÷ coin-flip Brier)
+--   * Brier score; points = 100 × (1 − Brier ÷ 2): 0 to 100, never below 0
 --   * only admins write, close and resolve questions; every decision is
 --     logged with its source link; scoring runs here, never in the app
 --   * players write only their own forecasts, only while a question is open
@@ -122,21 +122,21 @@ for each row execute function public.forecast_guard();
 
 -- (Re)score one question from scratch: each player's latest forecast
 -- before close against the outcome. Clears the scores of a question that
--- isn't resolved (disputed, void).
+-- isn't resolved (disputed, void). Points run from 0 (certain and wrong)
+-- to 100 (certain and right), a straight line from the Brier score, so the
+-- best expected score always comes from an honest call.
 create function public.score_question(q_id uuid) returns void
 language plpgsql security definer set search_path = '' as $$
 declare
   q public.questions;
-  n int;
 begin
   select * into q from public.questions where id = q_id;
   delete from public.scores where question_id = q_id;
   if q.status <> 'resolved' then
     return;
   end if;
-  n := cardinality(q.options);
   insert into public.scores (question_id, user_id, brier, points)
-  select q_id, f.user_id, b.brier, 100 * (1 - b.brier / (1 - 1.0 / n))
+  select q_id, f.user_id, b.brier, 100 * (1 - b.brier / 2)
   from (
     select distinct on (user_id) user_id, probs
     from public.forecasts
@@ -149,23 +149,28 @@ begin
   ) b;
 end $$;
 
--- The crowd for one question: how many calls, and the average chance on
--- each option. Aggregate only, so nobody's call is exposed while open.
-create function public.crowd(q_id uuid) returns table (calls int, probs numeric[])
+-- The crowd on every question: how many players have a call, and the
+-- average chance on each option. Aggregate only, so nobody's call is
+-- exposed while a question is open.
+create function public.crowds() returns table (question_id uuid, calls int, probs numeric[])
 language sql stable security definer set search_path = '' as $$
   with latest as (
-    select distinct on (f.user_id) f.probs
+    select distinct on (f.question_id, f.user_id) f.question_id, f.probs
     from public.forecasts f
     join public.questions q on q.id = f.question_id
-    where f.question_id = q_id and f.created_at < q.close_at
-    order by f.user_id, f.created_at desc, f.id desc
+    where f.created_at < q.close_at
+    order by f.question_id, f.user_id, f.created_at desc, f.id desc
+  ),
+  per_option as (
+    select l.question_id, u.i, avg(u.p) as avg_p
+    from latest l, unnest(l.probs) with ordinality as u (p, i)
+    group by l.question_id, u.i
   )
   select
-    (select count(*)::int from latest),
-    (select array_agg(a.avg_p order by a.i)
-       from (select u.i, avg(u.p) as avg_p
-               from latest, unnest(latest.probs) with ordinality as u (p, i)
-              group by u.i) a)
+    c.question_id,
+    c.calls,
+    (select array_agg(o.avg_p order by o.i) from per_option o where o.question_id = c.question_id)
+  from (select question_id, count(*)::int as calls from latest group by question_id) c
 $$;
 
 -- ---------- admin actions ----------
@@ -249,7 +254,7 @@ begin
   if coalesce(source_url, '') <> '' and source_url !~ '^https?://\S+\.\S+' then
     raise exception 'The link must start with http:// or https://.';
   end if;
-  update public.questions set status = 'void', outcome = null, resolved_at = null
+  update public.questions set status = 'void', outcome = null, resolved_at = now()
   where id = q_id and status <> 'void';
   if not found then
     raise exception 'This question is already void.';
@@ -274,6 +279,15 @@ revoke all on public.profiles, public.questions, public.forecasts, public.scores
 revoke all on public.leaderboard from anon, authenticated;
 revoke execute on function public.score_question(uuid), public.forecast_guard()
   from public, anon, authenticated;
+-- Granted outright rather than left to the defaults, which newer Supabase
+-- projects may tighten. Each admin action checks is_admin() itself.
+grant execute on function public.is_admin(), public.crowds() to anon, authenticated;
+grant execute on function
+  public.close_question(uuid),
+  public.resolve_question(uuid, int, text, text),
+  public.dispute_question(uuid, text),
+  public.void_question(uuid, text, text)
+  to authenticated;
 
 grant select on public.profiles, public.questions, public.scores, public.resolution_log, public.leaderboard
   to anon, authenticated;
@@ -296,7 +310,7 @@ create policy "Admins write questions" on public.questions for insert to authent
   with check (public.is_admin());
 
 -- Your own calls any time; everyone's once a question has closed (no
--- copying the leader while it's open: use crowd() for the average).
+-- copying the leader while it's open: crowds() gives the average).
 create policy "See calls" on public.forecasts for select to authenticated using (
   user_id = auth.uid()
   or exists (select 1 from public.questions q where q.id = question_id and q.close_at <= now())

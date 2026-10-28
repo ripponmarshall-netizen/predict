@@ -28,28 +28,44 @@ test("Brier: perfect is 0, certain and wrong is 2", () => {
   near(h.brier([50, 50], 1), 0.5);
 });
 
-test("Points: coin flip 0, perfect +100, certain and wrong −300", () => {
-  near(h.pointsFor([50, 50], 0), 0);
+test("Points: 0 (certain and wrong) to 100 (certain and right), never below 0", () => {
   near(h.pointsFor([100, 0], 0), 100);
-  near(h.pointsFor([0, 100], 0), -300);
-  near(h.pointsFor([90, 10], 0), 96);
-  near(h.pointsFor([90, 10], 1), -224);
-  near(h.pointsFor([70, 30], 1), -96);
+  near(h.pointsFor([0, 100], 0), 0);
+  near(h.pointsFor([50, 50], 0), 75);
+  near(h.pointsFor([90, 10], 0), 99);
+  near(h.pointsFor([90, 10], 1), 19);
+  near(h.pointsFor([70, 30], 1), 51);
+  for (let n = 2; n <= h.MAX_OPTIONS; n++) {
+    near(h.pointsFor(h.pickProbs(n, 0, 100), 1), 0, `n=${n} worst`);
+  }
 });
 
-test("Points: an even spread over any number of options scores 0", () => {
-  near(h.pointsFor([25, 25, 25, 25], 2), 0);
-  near(h.pointsFor([20, 20, 20, 20, 20], 0), 0);
-  near(h.baselineBrier(4), 0.75);
+test("Points: the coin flip for n options", () => {
+  near(h.coinFlipPoints(2), 75);
+  near(h.pointsFor([25, 25, 25, 25], 2), h.coinFlipPoints(4));
+  near(h.coinFlipPoints(4), 62.5);
   // 4 options, 70% on the right one, 10% on each other.
-  near(h.pointsFor([70, 10, 10, 10], 0), 100 * (1 - 0.12 / 0.75));
+  near(h.pointsFor([70, 10, 10, 10], 0), 94);
 });
 
-test("fmtPts rounds half away from zero and uses a real minus", () => {
-  assert.strictEqual(h.fmtPts(2.5), "+3");
-  assert.strictEqual(h.fmtPts(-2.5), "−3");
+test("Points stay honest: your best expected score is your real belief", () => {
+  // If you think Yes is b% likely, calling exactly b% earns the most on
+  // average. (A plain clamp at 0 fails this: it pays to go 100%.)
+  const expected = (b, q) =>
+    (b / 100) * h.pointsFor([q, 100 - q], 0) +
+    (1 - b / 100) * h.pointsFor([q, 100 - q], 1);
+  for (let b = 0; b <= 100; b += 5) {
+    let best = 0;
+    for (let q = 0; q <= 100; q++)
+      if (expected(b, q) > expected(b, best) + 1e-9) best = q;
+    assert.strictEqual(best, b, `belief ${b}% is best called as ${best}%`);
+  }
+});
+
+test("fmtPts: whole numbers, half away from zero, thousands separated", () => {
+  assert.strictEqual(h.fmtPts(2.5), "3");
   assert.strictEqual(h.fmtPts(0.4), "0");
-  assert.strictEqual(h.fmtPts(-0.4), "0");
+  assert.strictEqual(h.fmtPts(1249.6), "1,250");
 });
 
 /* ---------- forecasts ---------- */
@@ -263,9 +279,13 @@ test("forecast, close, resolve, score", () => {
   assert.strictEqual(s.log[0].outcome, "Yes");
 
   const sc = h.scoreAll(s);
-  near(sc.byPlayer.get(h.ME).points, 96);
-  near(sc.byPlayer.get(kat).points, -96);
-  near(sc.byPlayer.get(dee).points, 0);
+  near(sc.byPlayer.get(h.ME).points, 99);
+  near(sc.byPlayer.get(kat).points, 51);
+  near(sc.byPlayer.get(dee).points, 75);
+  assert.deepStrictEqual(sc.crowds.get(qid), {
+    count: 3,
+    probs: [170 / 3, 130 / 3],
+  });
   const rows = h.leaderboard(s, sc, "all");
   assert.deepStrictEqual(
     rows.map((r) => [r.player.handle, r.rank]),
@@ -291,11 +311,68 @@ test("forecast, close, resolve, score", () => {
   assert.deepStrictEqual(
     table.map((t) => [t.parish, t.players, Math.round(t.avg)]),
     [
-      ["Portland", 1, 96],
-      ["St Andrew", 2, -48],
+      ["Portland", 1, 99],
+      ["St Andrew", 2, 63],
     ],
   );
-  assert.match(h.leaderboardText(rows, "All players"), /1\. rippon {2}\+96/);
+  assert.match(h.leaderboardText(rows, "All players"), /1\. rippon {2}99/);
+});
+
+test("accuracy ranks by points per call, from three scored calls", () => {
+  let { s, kat, dee } = world();
+  // kat: three calls, all 90% and right (99 each). dee: one perfect call.
+  for (let i = 0; i < 3; i++) {
+    s = h.createQuestion(
+      s,
+      goodDraft({ title: `Will question ${i} come true?` }),
+      NOW,
+    );
+    const id = s.questions[0].id;
+    s = h.addForecast(
+      s,
+      { playerId: kat, questionId: id, probs: [90, 10] },
+      NOW + 1,
+    );
+    if (i === 0)
+      s = h.addForecast(
+        s,
+        { playerId: dee, questionId: id, probs: [100, 0] },
+        NOW + 1,
+      );
+    s = h.closeQuestion(s, id, NOW + 2);
+    s = h.resolveQuestion(s, id, 0, { sourceUrl: "https://x.org" }, NOW + 3);
+  }
+  const sc = h.scoreAll(s);
+  assert.deepStrictEqual(
+    h
+      .leaderboard(s, sc, "all", null, "points")
+      .map((r) => [r.player.handle, r.rank]),
+    [
+      ["kat", 1],
+      ["dee", 2],
+      ["rippon", null],
+    ],
+  );
+  const acc = h.leaderboard(s, sc, "all", null, "accuracy");
+  assert.deepStrictEqual(
+    acc.map((r) => [r.player.handle, r.rank]),
+    [
+      ["kat", 1],
+      ["dee", null],
+      ["rippon", null],
+    ],
+  );
+  near(acc[0].avgPoints, 99);
+  assert.match(
+    h.leaderboardText(acc, "All", "", "accuracy"),
+    /1\. kat {2}99 a call/,
+  );
+  // Signed out (online), you aren't listed.
+  assert.ok(
+    !h
+      .leaderboard({ ...s, signedOut: true }, sc, "all")
+      .some((r) => r.player.id === h.ME),
+  );
 });
 
 test("only players with a scored call are ranked", () => {
@@ -324,7 +401,7 @@ test("only players with a scored call are ranked", () => {
     NOW + 3000,
   );
   const rows = h.leaderboard(s, h.scoreAll(s), "all");
-  // kat is below zero but ranked; you and dee have nothing scored yet.
+  // kat scored (badly) and is ranked; you and dee have nothing scored yet.
   assert.deepStrictEqual(
     rows.map((r) => [r.player.handle, r.rank]),
     [
@@ -351,7 +428,7 @@ test("dispute holds points; resolve again or void", () => {
     { sourceUrl: "https://boj.org.jm" },
     NOW + 3000,
   );
-  near(h.scoreAll(s).byPlayer.get(kat).points, 100 * (1 - 1.28 / 0.5));
+  near(h.scoreAll(s).byPlayer.get(kat).points, 36);
   assert.throws(() => h.disputeQuestion(s, qid, "", NOW), /disputed/);
   s = h.disputeQuestion(s, qid, "Wrong press release", NOW + 4000);
   assert.strictEqual(
@@ -375,7 +452,7 @@ test("dispute holds points; resolve again or void", () => {
     { sourceUrl: "https://boj.org.jm/right" },
     NOW + 6000,
   );
-  near(h.scoreAll(resolved).byPlayer.get(kat).points, 84);
+  near(h.scoreAll(resolved).byPlayer.get(kat).points, 96);
   const voided = h.voidQuestion(s, qid, { note: "Source unclear" }, NOW + 6000);
   assert.strictEqual(h.scoreAll(voided).byPlayer.get(kat), undefined);
   assert.throws(
@@ -528,6 +605,223 @@ test("sanitizeState drops broken records and keeps you", () => {
     s.forecasts.map((f) => f.id),
     ["f1"],
   );
+});
+
+/* ---------- online (data.jsx) ---------- */
+
+const d = require("./data.jsx");
+const UID = "11111111-1111-1111-1111-111111111111";
+const OTHER = "22222222-2222-2222-2222-222222222222";
+const rawOnline = () => ({
+  questions: [
+    {
+      id: "q1",
+      title: "Will the BOJ hold?",
+      kind: "binary",
+      options: ["Yes", "No"],
+      category: "Economy",
+      region: "JM",
+      close_at: "2026-11-05T14:00:00+00:00",
+      resolution_source: "BOJ",
+      resolution_url: "javascript:alert(1)",
+      status: "resolved",
+      outcome: 0,
+      resolved_at: "2026-11-05T20:00:00+00:00",
+      created_at: "2026-11-01T12:00:00+00:00",
+    },
+  ],
+  board: [
+    {
+      id: UID,
+      handle: "rippon",
+      parish: "Portland",
+      country: "Jamaica",
+      points: 99,
+      scored: 1,
+      avg_brier: 0.02,
+    },
+    {
+      id: OTHER,
+      handle: "kat",
+      parish: null,
+      country: "Jamaica",
+      points: 0,
+      scored: 0,
+      avg_brier: null,
+    },
+  ],
+  profile: {
+    id: UID,
+    handle: "rippon",
+    parish: "Portland",
+    country: "Jamaica",
+    is_admin: true,
+  },
+  myScores: [{ question_id: "q1", points: 99, brier: 0.02 }],
+  myForecasts: [
+    {
+      id: 7,
+      question_id: "q1",
+      probs: [90, 10],
+      created_at: "2026-11-02T12:00:00+00:00",
+    },
+  ],
+  log: [
+    {
+      id: 3,
+      question_id: "q1",
+      action: "resolve",
+      outcome: "Yes",
+      source_url: "https://boj.org.jm",
+      note: null,
+      at: "2026-11-05T20:00:00+00:00",
+    },
+  ],
+  crowds: [{ question_id: "q1", calls: 2, probs: [70, 30] }],
+});
+
+test("online rows become the app's state, with you as ME", () => {
+  const st = d.fromRemote(rawOnline(), UID);
+  assert.deepStrictEqual(
+    st.players.map((p) => p.id),
+    [h.ME, OTHER],
+  );
+  assert.strictEqual(st.players[1].parish, "");
+  assert.strictEqual(st.questions[0].closeAt, "2026-11-05T14:00:00+00:00");
+  assert.strictEqual(
+    st.questions[0].sourceUrl,
+    "",
+    "no javascript: links from the database either",
+  );
+  assert.deepStrictEqual(st.forecasts[0], {
+    id: "7",
+    playerId: h.ME,
+    questionId: "q1",
+    probs: [90, 10],
+    createdAt: "2026-11-02T12:00:00+00:00",
+  });
+  assert.strictEqual(st.log[0].sourceUrl, "https://boj.org.jm");
+  assert.deepStrictEqual(
+    [st.signedOut, st.needsProfile, st.isAdmin],
+    [false, false, true],
+  );
+  const sc = d.remoteScores(st, rawOnline(), UID);
+  assert.deepStrictEqual(sc.byPlayer.get(h.ME), {
+    points: 99,
+    scored: 1,
+    brierSum: 0.02,
+  });
+  assert.ok(!sc.byPlayer.has(OTHER), "no scored calls, no entry");
+  assert.deepStrictEqual(sc.byQuestion.get("q1").get(h.ME), {
+    points: 99,
+    brier: 0.02,
+  });
+  assert.deepStrictEqual(sc.crowds.get("q1"), { count: 2, probs: [70, 30] });
+  assert.deepStrictEqual(sc.latest.get("q1").get(h.ME).probs, [90, 10]);
+  // The same leaderboard code ranks online players.
+  assert.deepStrictEqual(
+    h.leaderboard(st, sc, "all").map((r) => [r.player.handle, r.rank]),
+    [["rippon", 1]],
+  );
+});
+
+test("online times are trimmed to milliseconds", () => {
+  assert.strictEqual(
+    d.ts("2026-10-28T03:06:00.123456+00:00"),
+    "2026-10-28T03:06:00.123+00:00",
+  );
+  assert.strictEqual(
+    d.ts("2026-10-28T03:06:00+00:00"),
+    "2026-10-28T03:06:00+00:00",
+  );
+  assert.strictEqual(d.ts(null), null);
+  const raw = rawOnline();
+  raw.questions[0].close_at = "2026-11-05T14:00:00.987654+00:00";
+  assert.strictEqual(
+    d.fromRemote(raw, UID).questions[0].closeAt,
+    "2026-11-05T14:00:00.987+00:00",
+  );
+});
+
+test("online: signed out, and signed in without a profile yet", () => {
+  const out = d.fromRemote(
+    { ...rawOnline(), profile: null, myScores: [], myForecasts: [] },
+    null,
+  );
+  assert.strictEqual(out.signedOut, true);
+  assert.ok(
+    out.players.some((p) => p.id === UID),
+    "your row is just another player when signed out",
+  );
+  assert.ok(
+    !h
+      .leaderboard(out, d.remoteScores(out, rawOnline(), null), "all")
+      .some((r) => r.player.id === h.ME),
+  );
+  const fresh = d.fromRemote({ ...rawOnline(), board: [], profile: null }, UID);
+  assert.deepStrictEqual(
+    [fresh.signedOut, fresh.needsProfile, fresh.isAdmin],
+    [false, true, false],
+  );
+  assert.strictEqual(fresh.players.find((p) => p.id === h.ME).handle, "you");
+});
+
+test("errors read as something a player can act on", () => {
+  const f = d.friendlyError;
+  assert.strictEqual(
+    f({
+      code: "23505",
+      message:
+        'duplicate key value violates unique constraint "profiles_handle_key"',
+    }),
+    "That handle is taken.",
+  );
+  assert.match(
+    f({ code: "42501", message: "new row violates row-level security policy" }),
+    /not allowed/,
+  );
+  assert.match(f(new TypeError("Load failed")), /Couldn't reach/);
+  assert.match(f(new TypeError("Failed to fetch")), /Couldn't reach/);
+  assert.strictEqual(
+    f({ code: "P0001", message: "This question has closed." }),
+    "This question has closed.",
+  );
+  assert.match(
+    f({ message: "Token has expired or is invalid" }),
+    /code is wrong/,
+  );
+  assert.match(
+    f({ status: 429, message: "email rate limit exceeded" }),
+    /Too many/,
+  );
+});
+
+test("the phone api applies the same state changes", () => {
+  let st = h.blankState();
+  const api = d.localApi(
+    () => st,
+    (next) => {
+      st = next;
+    },
+  );
+  // The phone api uses the real clock, so the close time must be from now.
+  api.createQuestion(
+    goodDraft({ closeLocal: h.toJmInput(iso(Date.now() + 5 * DAY)) }),
+  );
+  const id = st.questions[0].id;
+  api.forecast(id, [80, 20]);
+  api.addPlayer({ handle: "kat" });
+  const kat = st.players.find((p) => p.handle === "kat").id;
+  api.recordFor(kat, id, [40, 60]);
+  assert.deepStrictEqual(
+    st.forecasts.map((f) => [f.playerId, f.by]),
+    [
+      [h.ME, undefined],
+      [kat, "admin"],
+    ],
+  );
+  assert.throws(() => api.forecast(id, [80, 21]), /adding up to 100/);
+  assert.strictEqual(d.dataMode(), "local", "no config in Node: local");
 });
 
 console.log(`${passed} tests passed`);

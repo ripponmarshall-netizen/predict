@@ -2,7 +2,7 @@
 /* Pure JS, no JSX — kept Node-loadable so predikt.test.js can require() it. */
 
 const APP_NAME = "Predikt";
-const APP_VERSION = "0.1";
+const APP_VERSION = "0.2";
 const CONTACT_EMAIL = "ripponmarshall@yahoo.com";
 const STORAGE = "predikt:v1";
 const ME = "me";
@@ -15,8 +15,8 @@ const JM_OFFSET = "-05:00";
 /* Region tags drive the Jamaica / International toggle. Adding a region
    (e.g. Caribbean) is a line here, not a rebuild. */
 const REGIONS = [
-  { v: "JM", l: "Jamaica", color: "var(--jm)" },
-  { v: "INTL", l: "International", color: "var(--intl)" },
+  { v: "JM", l: "Jamaica", color: "var(--jm)", icon: "pin" },
+  { v: "INTL", l: "International", color: "var(--intl)", icon: "globe" },
 ];
 const CATEGORIES = ["Sport", "Politics", "Economy", "Culture", "Markets", "Other"];
 const KINDS = [
@@ -25,6 +25,8 @@ const KINDS = [
   { v: "range", l: "Number range" },
 ];
 const MAX_OPTIONS = 8;
+/* Accuracy rankings need a few scored calls: one lucky call isn't a record. */
+const MIN_FOR_ACCURACY = 3;
 
 const PARISHES = [
   "Kingston", "St Andrew", "St Thomas", "Portland", "St Mary", "St Ann", "Trelawny",
@@ -58,10 +60,9 @@ function sum(xs) {
 function roundAway(x) {
   return Math.sign(x) * Math.round(Math.abs(x));
 }
+/* Points as a whole number, with thousands separators ("1,250"). */
 function fmtPts(x) {
-  const r = roundAway(x || 0);
-  // The real minus sign: a hyphen reads as a dash in a list of scores.
-  return r > 0 ? `+${r}` : r < 0 ? `−${-r}` : "0";
+  return roundAway(x || 0).toLocaleString("en-GB");
 }
 function fmtBrier(x) {
   return x == null || !isFinite(x) ? "—" : x.toFixed(3);
@@ -245,23 +246,28 @@ function crowdOf(latestForQ, n) {
 function brier(probs, outcome) {
   return sum(probs.map((p, i) => (p / 100 - (i === outcome ? 1 : 0)) ** 2));
 }
-/* What an even spread across n options scores whatever happens (0.5 on a
-   Yes/No): the coin flip to beat. */
-function baselineBrier(n) {
-  return 1 - 1 / n;
-}
-/* Points: 100 × how much better than the coin flip. A coin flip scores 0,
-   perfect scores +100, and confident and wrong goes negative (100% on the
-   wrong side of a Yes/No is −300). So the leaderboard rewards accuracy,
-   not just forecasting on everything. supabase/schema.sql scores the same
-   way; keep the two in step. */
+/* Points: 100 × (1 − Brier ÷ 2), so every call scores from 0 (certain
+   and wrong) to 100 (certain and right), never below zero. A straight line
+   from the Brier score keeps it honest: your best expected score always
+   comes from saying what you really think. (Clamping a signed score at 0
+   instead would make going 100% on every call free, since a wrong call
+   could cost nothing.) 50% on a Yes/No scores 75 either way.
+   supabase/schema.sql scores the same way; keep the two in step. */
 function pointsFor(probs, outcome) {
-  return 100 * (1 - brier(probs, outcome) / baselineBrier(probs.length));
+  return 100 * (1 - brier(probs, outcome) / 2);
+}
+/* What an even spread across n options scores, whatever happens: the
+   coin flip to beat (75 on a Yes/No). */
+function coinFlipPoints(n) {
+  return 100 * (1 - (1 - 1 / n) / 2);
 }
 
-/* Scores for every resolved question:
+/* Scores for every resolved question, and the crowd on every question:
    { byPlayer: Map(playerId → { points, scored, brierSum }),
-     byQuestion: Map(questionId → Map(playerId → { points, brier })) } */
+     byQuestion: Map(questionId → Map(playerId → { points, brier })),
+     latest: Map(questionId → Map(playerId → forecast)),
+     crowds: Map(questionId → { count, probs }) }
+   Online, the same shape is built from the server's scores (data.jsx). */
 function scoreAll(state) {
   const latest = latestForecasts(state.forecasts, state.questions);
   const byPlayer = new Map();
@@ -280,7 +286,8 @@ function scoreAll(state) {
     }
     byQuestion.set(q.id, m);
   }
-  return { byPlayer, byQuestion, latest };
+  const crowds = new Map(state.questions.map((q) => [q.id, crowdOf(latest.get(q.id), q.options.length)]));
+  return { byPlayer, byQuestion, latest, crowds };
 }
 
 /* Leagues: everyone, players in Jamaica, the diaspora, or one parish. */
@@ -290,29 +297,38 @@ function inLeague(player, league, parish) {
   if (league === "parish") return !!parish && player.parish === parish;
   return true;
 }
-/* Ranked rows for a league. Points first, then the better average Brier,
-   then more questions scored. Equal (rounded) points share a rank. Only a
-   player with a scored call is ranked: sitting out would otherwise beat
-   anyone below zero. The unranked follow, rank null. Players who haven't
-   made a call at all are left off (except you). */
-function leaderboard(state, scores, league, parish) {
+/* Ranked rows for a league, by "points" (total: every call adds, so it
+   rewards turning up and being right) or "accuracy" (average points per
+   scored call, from MIN_FOR_ACCURACY calls). Ties on the rounded value
+   share a rank. Only players with enough scored calls are ranked; the rest
+   follow with rank null. Players with no calls at all are left off, except
+   you (when signed in). */
+function leaderboard(state, scores, league, parish, by = "points") {
   const forecasters = new Set(state.forecasts.map((f) => f.playerId));
+  const need = by === "accuracy" ? MIN_FOR_ACCURACY : 1;
+  const value = (r) => roundAway(by === "accuracy" ? r.avgPoints : r.points);
   const rows = state.players
-    .filter((p) => inLeague(p, league, parish) && (forecasters.has(p.id) || p.id === ME))
+    .filter((p) => inLeague(p, league, parish) &&
+      (forecasters.has(p.id) || scores.byPlayer.has(p.id) || (p.id === ME && !state.signedOut)))
     .map((p) => {
       const s = scores.byPlayer.get(p.id) || { points: 0, scored: 0, brierSum: 0 };
-      return { player: p, points: s.points, scored: s.scored, avgBrier: s.scored ? s.brierSum / s.scored : null };
+      return {
+        player: p, points: s.points, scored: s.scored,
+        avgPoints: s.scored ? s.points / s.scored : null,
+        avgBrier: s.scored ? s.brierSum / s.scored : null,
+        ranked: s.scored >= need,
+      };
     })
     .sort((a, b) =>
-      (b.scored > 0) - (a.scored > 0) ||
-      roundAway(b.points) - roundAway(a.points) ||
+      b.ranked - a.ranked ||
+      value(b) - value(a) ||
       (a.avgBrier ?? 9) - (b.avgBrier ?? 9) ||
       b.scored - a.scored ||
       a.player.handle.localeCompare(b.player.handle));
   rows.forEach((r, i) => {
     const prev = rows[i - 1];
-    if (!r.scored) r.rank = null;
-    else r.rank = prev && roundAway(prev.points) === roundAway(r.points) ? prev.rank : i + 1;
+    if (!r.ranked) r.rank = null;
+    else r.rank = prev && prev.ranked && value(prev) === value(r) ? prev.rank : i + 1;
   });
   return rows;
 }
@@ -404,7 +420,7 @@ function disputeQuestion(state, id, note, now) {
   const q = findQ(state, id);
   if (q.status === "void" || q.status === "disputed") throw new Error("This question can't be disputed.");
   if (!String(note || "").trim()) throw new Error("Say what's disputed.");
-  return logged(putQ(state, { ...q, status: "disputed", outcome: null }), { questionId: id, action: "dispute", note: note.trim() }, now);
+  return logged(putQ(state, { ...q, status: "disputed", outcome: null, resolvedAt: null }), { questionId: id, action: "dispute", note: note.trim() }, now);
 }
 
 /* If the source is unclear, void the question: no points for anyone. */
@@ -413,7 +429,7 @@ function voidQuestion(state, id, { sourceUrl, note }, now) {
   if (q.status === "void") throw new Error("This question is already void.");
   if (!String(note || "").trim()) throw new Error("Say why it's void.");
   if (sourceUrl && !isUrl(sourceUrl)) throw new Error("The link must start with http:// or https://.");
-  return logged(putQ(state, { ...q, status: "void", outcome: null }), { questionId: id, action: "void", sourceUrl: (sourceUrl || "").trim(), note: note.trim() }, now);
+  return logged(putQ(state, { ...q, status: "void", outcome: null, resolvedAt: new Date(now).toISOString() }), { questionId: id, action: "void", sourceUrl: (sourceUrl || "").trim(), note: note.trim() }, now);
 }
 
 function deleteQuestion(state, id) {
@@ -474,9 +490,10 @@ function removeSample(state) {
 function shareCallText(q, probs, url) {
   return `My call on ${APP_NAME}: "${q.title}" ${fmtForecast(q, probs)}. What's yours?${url ? `\n${url}` : ""}`;
 }
-function leaderboardText(rows, title, url) {
-  const lines = rows.filter((r) => r.rank != null).slice(0, 10).map((r) => `${r.rank}. ${r.player.handle}  ${fmtPts(r.points)}`);
-  return [`${APP_NAME} leaderboard · ${title}`, ...lines, "", "Beat the coin flip:" + (url ? ` ${url}` : "")].join("\n");
+function leaderboardText(rows, title, url, by = "points") {
+  const lines = rows.filter((r) => r.rank != null).slice(0, 10)
+    .map((r) => `${r.rank}. ${r.player.handle}  ${by === "accuracy" ? `${roundAway(r.avgPoints)} a call` : roundAway(r.points)}`);
+  return [`${APP_NAME} leaderboard · ${title}${by === "accuracy" ? " · accuracy" : ""}`, ...lines, "", "Make your call:" + (url ? ` ${url}` : "")].join("\n");
 }
 
 /* ---------- sample data ----------
@@ -602,14 +619,14 @@ function saveState(s) {
 }
 
 const _exports = {
-  APP_NAME, APP_VERSION, CONTACT_EMAIL, STORAGE, ME, JM_TZ, REGIONS, CATEGORIES, KINDS, MAX_OPTIONS,
+  APP_NAME, APP_VERSION, CONTACT_EMAIL, STORAGE, ME, JM_TZ, REGIONS, CATEGORIES, KINDS, MAX_OPTIONS, MIN_FOR_ACCURACY,
   PARISHES, COUNTRIES, NEW_QUESTION_CHECKS,
   uid, regionOf, sum, roundAway, fmtPts, fmtBrier,
   fmtWhen, toJmInput, fromJmInput, fmtIn,
   isClosed, phase, phaseLabel, ruleFlags, isUrl, questionProblems,
   validProbs, binaryProbs, minConfidence, pickProbs, pickOf, fmtForecast,
   countingForecast, latestForecasts, crowdOf,
-  brier, baselineBrier, pointsFor, scoreAll, inLeague, leaderboard, parishTable,
+  brier, pointsFor, coinFlipPoints, scoreAll, inLeague, leaderboard, parishTable,
   addForecast, createQuestion, closeQuestion, resolveQuestion, disputeQuestion, voidQuestion, deleteQuestion,
   handleProblem, addPlayer, updateProfile, removePlayer, hasSample, removeSample,
   shareCallText, leaderboardText,

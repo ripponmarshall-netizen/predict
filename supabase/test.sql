@@ -77,8 +77,8 @@ select test.expect_error(format($$insert into forecasts (question_id, probs, cre
 select set_config('request.jwt.claim.sub', :'dee', false);
 insert into forecasts (question_id, probs) values (:'q', '{50,50}');
 select test.eq((select count(*) from forecasts)::int, 1, 'an open question hides other calls');
-select test.eq((select calls from crowd(:'q')), 2, 'the crowd counts each player once');
-select test.eq((select probs from crowd(:'q')), array[40, 60]::numeric[], 'the crowd averages latest calls');
+select test.eq((select calls from crowds() where question_id = :'q'), 2, 'the crowd counts each player once');
+select test.eq((select probs from crowds() where question_id = :'q'), array[40, 60]::numeric[], 'the crowd averages latest calls');
 select set_config('request.jwt.claim.sub', :'admin', false);
 insert into forecasts (question_id, probs) values (:'q', '{90,10}');
 
@@ -99,10 +99,10 @@ select test.expect_error(format('select resolve_question(%L, 2, %L)', :'q', 'htt
 select resolve_question(:'q', 0, 'https://boj.org.jm/press', 'Held at 6%');
 
 -- 5. Scores: the same numbers as predikt.test.js.
-select test.eq((select round(points, 6) from scores where user_id = :'admin'), 96.000000, '90% Yes, Yes');
-select test.eq((select round(points, 6) from scores where user_id = :'kat'), -96.000000, 'only the latest call (30%) counts');
-select test.eq((select round(points, 6) from scores where user_id = :'dee'), 0.000000, 'a coin flip scores 0');
-select test.eq((select string_agg(handle || ':' || round(points), ',' order by points desc) from leaderboard), 'rippon:96,Dee:0,kat:-96', 'leaderboard');
+select test.eq((select round(points, 6) from scores where user_id = :'admin'), 99.000000, '90% Yes, Yes');
+select test.eq((select round(points, 6) from scores where user_id = :'kat'), 51.000000, 'only the latest call (30%) counts');
+select test.eq((select round(points, 6) from scores where user_id = :'dee'), 75.000000, 'a coin flip scores 75');
+select test.eq((select string_agg(handle || ':' || round(points), ',' order by points desc) from leaderboard), 'rippon:99,Dee:75,kat:51', 'leaderboard');
 select test.eq((select action || ':' || outcome from resolution_log order by id desc limit 1), 'resolve:Yes', 'the result is logged');
 select test.expect_error(format('select resolve_question(%L, 1, %L)', :'q', 'https://boj.org.jm'), 'already settled');
 select test.expect_error($$delete from scores$$, 'permission denied');
@@ -115,7 +115,8 @@ select dispute_question(:'q', 'Wrong press release');
 select test.eq((select count(*) from scores)::int, 0, 'a dispute holds points');
 select test.eq((select points from leaderboard where handle = 'rippon'), 0::numeric, 'leaderboard during a dispute');
 select resolve_question(:'q', 1, 'https://boj.org.jm/right');
-select test.eq((select round(points, 6) from scores where user_id = :'kat'), 64.000000, '30% Yes, No');
+select test.eq((select round(points, 6) from scores where user_id = :'kat'), 91.000000, '30% Yes, No');
+select test.eq((select round(points, 6) from scores where user_id = :'admin'), 19.000000, '90% Yes, No: low, never below 0');
 
 -- 7. Void: nobody scores, and it stays void.
 select void_question(:'q', 'Source unclear');
@@ -133,7 +134,8 @@ insert into forecasts (question_id, probs) values (:'q2', '{70,10,10,10}');
 select set_config('request.jwt.claim.sub', :'admin', false);
 select close_question(:'q2');
 select resolve_question(:'q2', 0, 'https://www.issasports.com');
-select test.eq((select round(points, 6) from scores where question_id = :'q2'), 84.000000, '4 options, 70% on the winner');
+select test.eq((select round(points, 6) from scores where question_id = :'q2'), 94.000000, '4 options, 70% on the winner');
+select test.eq((select calls from crowds() where question_id = :'q2'), 1, 'crowds covers every question');
 
 -- 9. Signed out: read the public tables, nothing else.
 reset role;
@@ -142,6 +144,7 @@ select set_config('request.jwt.claim.sub', '', false);
 select test.eq((select count(*) from questions)::int, 2, 'anyone can read questions');
 select test.eq((select count(*) from leaderboard)::int, 3, 'anyone can read the leaderboard');
 select test.expect_error($$select * from forecasts$$, 'permission denied');
+select test.eq((select count(*) from crowds())::int, 2, 'anyone can read the crowd');
 select test.expect_error(format('select close_question(%L)', :'q2'), 'Admins only');
 reset role;
 
