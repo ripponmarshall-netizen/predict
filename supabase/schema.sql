@@ -279,10 +279,20 @@ revoke all on public.profiles, public.questions, public.forecasts, public.scores
 revoke all on public.leaderboard from anon, authenticated;
 revoke execute on function public.score_question(uuid), public.forecast_guard()
   from public, anon, authenticated;
--- Granted outright rather than left to the defaults, which newer Supabase
--- projects may tighten. Each admin action checks is_admin() itself.
-grant execute on function public.is_admin(), public.crowds() to anon, authenticated;
+-- Postgres lets everyone run a new function; take that back too. Signed
+-- out, the app only needs crowds() (aggregates, public on purpose). The
+-- admin actions are for signed-in players, and each checks is_admin()
+-- itself. Granted outright rather than left to the defaults.
+revoke execute on function
+  public.is_admin(),
+  public.close_question(uuid),
+  public.resolve_question(uuid, int, text, text),
+  public.dispute_question(uuid, text),
+  public.void_question(uuid, text, text)
+  from public, anon;
+grant execute on function public.crowds() to anon, authenticated;
 grant execute on function
+  public.is_admin(),
   public.close_question(uuid),
   public.resolve_question(uuid, int, text, text),
   public.dispute_question(uuid, text),

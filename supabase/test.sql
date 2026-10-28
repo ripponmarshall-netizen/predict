@@ -145,7 +145,8 @@ select test.eq((select count(*) from questions)::int, 2, 'anyone can read questi
 select test.eq((select count(*) from leaderboard)::int, 3, 'anyone can read the leaderboard');
 select test.expect_error($$select * from forecasts$$, 'permission denied');
 select test.eq((select count(*) from crowds())::int, 2, 'anyone can read the crowd');
-select test.expect_error(format('select close_question(%L)', :'q2'), 'Admins only');
+select test.expect_error(format('select close_question(%L)', :'q2'), 'permission denied');
+select test.expect_error($$select is_admin()$$, 'permission denied');
 reset role;
 
 \echo 'All schema checks passed'
